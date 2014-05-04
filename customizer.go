@@ -2,9 +2,11 @@ package customizer
 
 import (
     "appengine"
+    "appengine/datastore"
     "appengine/taskqueue"
     "appengine/urlfetch"
     "bytes"
+    "encoding/json"
     "fmt"
     "html"
     "io/ioutil"
@@ -56,6 +58,11 @@ func cronHandler(w http.ResponseWriter, r *http.Request) {
     }
 }
 
+type IPStore struct {
+    Country string
+    Data    []byte
+}
+
 func updateHandler(w http.ResponseWriter, r *http.Request) {
     context := appengine.NewContext(r)
     r.ParseForm()
@@ -66,49 +73,89 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
     client := urlfetch.Client(context)
     resp, err := client.Get(update_url)
     if err != nil {
-        context.Errorf("I can't get the ip list of registry: %s. code: %s", registry, err.Error())
+        context.Errorf("I can't get the ip list of registry: %s. message: %s", registry, err.Error())
         return
     }
     defer resp.Body.Close()
 
     contents, err := ioutil.ReadAll(resp.Body)
     if err != nil {
-        context.Errorf("I can't get contents: %s. code: %s", registry, err.Error())
+        context.Errorf("I can't get contents: %s. message: %s", registry, err.Error())
         return
     }
 
     result := ipCheckRegex.FindAllSubmatch(contents, -1)
-    if result != nil {
-        iplist := make(IPListType)
-        for _, line := range result {
-            start, err := getIPtoUint(line[2])
-            if err != nil {
-                context.Errorf("getIPtoInt is failed. ip = %s, %s", line[2], err)
-            }
-            buf := bytes.NewBuffer(line[3])
-            value, err := strconv.ParseUint(buf.String(), 10, 32)
-            if err != nil {
-                context.Errorf("updateHandler is failed." +
-                    " The error can't convert bytes[] to int.")
-            }
-            end := start + uint(value)
+    if result == nil {
+        context.Errorf("I can't get consistent contents to ipCheckRegex. message: %s", err.Error())
+        return
+    }
 
-            ip := IPType{
-                "start": start,
-                "value": uint(value),
-                "end":   end,
-            }
-            reg := string(line[1])
-            if len(iplist[reg]) == 0 {
-                iplist[reg] = []IPType{}
-            }
-            iplist[reg] = append(iplist[reg], ip)
+    iplist := make(IPListType)
+    for _, line := range result {
+        start, err := getIPtoUint(line[2])
+        if err != nil {
+            context.Errorf("getIPtoInt is failed. ip = %s, message: %s", line[2], err.Error())
+            continue
+        }
+        buf := bytes.NewBuffer(line[3])
+        value, err := strconv.ParseUint(buf.String(), 10, 32)
+        if err != nil {
+            context.Errorf("updateHandler is failed."+
+                " The error can't convert bytes[] to int. message: %s", err.Error())
+            continue
+        }
+        end := start + uint(value)
+
+        ip := IPType{
+            "start": start,
+            "value": uint(value),
+            "end":   end,
+        }
+        country := string(line[1])
+        if len(iplist[country]) == 0 {
+            iplist[country] = []IPType{}
+        }
+        iplist[country] = append(iplist[country], ip)
+    }
+
+    // To optimize the list of ip.
+    context.Infof("optimize start. %s", registry)
+    iplist = optimize(iplist)
+    context.Infof("optimize end. %s", registry)
+
+    // To delete old registry on datastore.
+    var u []IPStore
+    query := datastore.NewQuery(registry)
+    keys, err := query.GetAll(context, &u)
+    if err != nil {
+        context.Errorf("I can't query %s. message: %s", registry, err.Error())
+    }
+    if len(keys) > 0 {
+        err = datastore.DeleteMulti(context, keys)
+        if err != nil {
+            context.Errorf("I can't delete %s. message: %s", registry, err.Error())
+        }
+    }
+
+    // To add the countries of the registry on datastore.
+    for country, list := range iplist {
+        var jsonbuf bytes.Buffer
+        jd, err := json.Marshal(list)
+        jsonbuf.Write(jd)
+        if err != nil {
+            context.Errorf("the list isn't converted. message: %s", err.Error())
+            continue
         }
 
-        // To optimize the list of ip.
-        context.Infof("optimize start. %s", registry)
-        iplist = optimize(iplist)
-        context.Infof("optimize end. %s", registry)
+        entry := IPStore{
+            Country: country,
+            Data:    jsonbuf.Bytes(),
+        }
+        key, err := datastore.Put(context, datastore.NewIncompleteKey(context, registry, nil), &entry)
+        if err != nil {
+            context.Errorf("the list of %s is not put. message: %s", key, err.Error())
+            continue
+        }
     }
 }
 
