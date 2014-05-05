@@ -99,8 +99,8 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         return
     } else {
         if len(keys) == 0 {
-            context.Infof("The kind of %s on datastore wasn't find.\n"+
-                " therefore the update is starting.", dateKind)
+            context.Infof("The %s of %s on datastore wasn't find.\n"+
+                " therefore the update is starting.", dateKind, registry)
         } else {
             var old_date UpdateDateStore
             err = datastore.Get(context, keys[0], &old_date)
