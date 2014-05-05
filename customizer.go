@@ -23,15 +23,9 @@ var rirList = map[string]string{
     "AFRINIC": "http://ftp.apnic.net/stats/afrinic/delegated-afrinic-extended-latest",
     "RIPE":    "http://ftp.apnic.net/stats/ripe-ncc/delegated-ripencc-extended-latest",
 }
-var rirWorkList = map[string][]string{
-    "LACNIC":  []string{"ラテンアメリカ", "カリブ海"},
-    "ARIN":    []string{"アメリカ"},
-    "APNIC":   []string{"アジア", "太平洋"},
-    "AFRINIC": []string{"アフリカ"},
-    "RIPE":    []string{"ヨーロッパ", "中東", "中央アジア"},
-}
 var ipCheckRegex = regexp.MustCompile("([a-zA-Z]{2})\\|ipv4\\|(\\d+.\\d+.\\d+.\\d+)\\|(\\d+)")
-var ipHashCheckRegex = regexp.MustCompile("[\\d.]+\\|[a-zA-Z]+\\|\\d*\\|\\d*\\|\\d*\\|\\d*\\|[+-]?\\d+")
+var ipHeaderCheckRegex = regexp.MustCompile("[\\d.]+\\|[a-zA-Z]+\\|(\\d*)\\|\\d*\\|\\d*\\|\\d*\\|[+-]?\\d+")
+var dateKind = "LATEST_UPDATE"
 
 type IPType map[string]uint
 type IPListType map[string][]IPType
@@ -58,6 +52,11 @@ func cronHandler(w http.ResponseWriter, r *http.Request) {
     }
 }
 
+type UpdateDateStore struct {
+    Registry string
+    Date     string
+}
+
 type IPStore struct {
     Country string
     Data    []byte
@@ -73,35 +72,84 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
     client := urlfetch.Client(context)
     resp, err := client.Get(update_url)
     if err != nil {
-        context.Errorf("I can't get the ip list of registry: %s. message: %s", registry, err.Error())
+        context.Criticalf("I can't get the ip list of registry: %s. message: %s", registry, err.Error())
         return
     }
     defer resp.Body.Close()
 
     contents, err := ioutil.ReadAll(resp.Body)
     if err != nil {
-        context.Errorf("I can't get contents: %s. message: %s", registry, err.Error())
+        context.Criticalf("I can't get contents: %s.\nmessage: %s", registry, err.Error())
+        return
+    }
+
+    // To checked the date of latest update, and old update date.
+    date := ipHeaderCheckRegex.FindSubmatch(contents)
+    if date == nil {
+        context.Criticalf("I can't get consistent contents "+
+            "to ipHeaderCheckRegex.\nmessage: %s", err.Error())
+        return
+    }
+    var uds []UpdateDateStore
+    query := datastore.NewQuery(dateKind)
+    query.Filter("Registry =", registry)
+    keys, err := query.GetAll(context, &uds)
+    if err != nil {
+        context.Criticalf("I can't the query of %s.\nmessage: %s", dateKind, err.Error())
+        return
+    } else {
+        if len(keys) == 0 {
+            context.Infof("The kind of %s on datastore wasn't find.\n"+
+                " therefore the update is starting.", dateKind)
+        } else {
+            var old_date UpdateDateStore
+            err = datastore.Get(context, keys[0], &old_date)
+            if err != nil {
+                context.Criticalf("I can't get consistent contents "+
+                    "to ipHeaderCheckRegex.\nmessage: %s", err.Error())
+                return
+            }
+            if old_date.Date == string(date[1]) {
+                context.Infof("%s is last update. so this update is end.", dateKind)
+                return
+            }
+            err = datastore.DeleteMulti(context, keys)
+            if err != nil {
+                context.Criticalf("I can't delete %s.\nmessage: %s", dateKind, err.Error())
+                return
+            }
+        }
+    }
+    context.Infof("The list of %s is starting update.", registry)
+
+    // To write the new date of a registry.
+    entry := UpdateDateStore{
+        Registry: registry,
+        Date:     string(date[1]),
+    }
+    key, err := datastore.Put(context, datastore.NewIncompleteKey(context, dateKind, nil), &entry)
+    if err != nil {
+        context.Criticalf("the list of %s is not put.\nmessage: %s", key, err.Error())
         return
     }
 
     result := ipCheckRegex.FindAllSubmatch(contents, -1)
     if result == nil {
-        context.Errorf("I can't get consistent contents to ipCheckRegex. message: %s", err.Error())
+        context.Criticalf("I can't get consistent contents to ipCheckRegex.\nmessage: %s", err.Error())
         return
     }
-
     iplist := make(IPListType)
     for _, line := range result {
         start, err := getIPtoUint(line[2])
         if err != nil {
-            context.Errorf("getIPtoInt is failed. ip = %s, message: %s", line[2], err.Error())
+            context.Errorf("getIPtoInt is failed. ip = %s,\nmessage: %s", line[2], err.Error())
             continue
         }
         buf := bytes.NewBuffer(line[3])
         value, err := strconv.ParseUint(buf.String(), 10, 32)
         if err != nil {
-            context.Errorf("updateHandler is failed."+
-                " The error can't convert bytes[] to int. message: %s", err.Error())
+            context.Errorf("updateHandler is failed.\n"+
+                " The error can't convert bytes[] to int.\nmessage: %s", err.Error())
             continue
         }
         end := start + uint(value)
@@ -125,15 +173,15 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 
     // To delete old registry on datastore.
     var u []IPStore
-    query := datastore.NewQuery(registry)
-    keys, err := query.GetAll(context, &u)
+    query = datastore.NewQuery(registry)
+    keys, err = query.GetAll(context, &u)
     if err != nil {
-        context.Errorf("I can't query %s. message: %s", registry, err.Error())
+        context.Errorf("I can't query %s.\nmessage: %s", registry, err.Error())
     }
     if len(keys) > 0 {
         err = datastore.DeleteMulti(context, keys)
         if err != nil {
-            context.Errorf("I can't delete %s. message: %s", registry, err.Error())
+            context.Errorf("I can't delete %s.\nmessage: %s", registry, err.Error())
         }
     }
 
@@ -143,7 +191,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         jd, err := json.Marshal(list)
         jsonbuf.Write(jd)
         if err != nil {
-            context.Errorf("the list isn't converted. message: %s", err.Error())
+            context.Errorf("the list isn't converted.\nmessage: %s", err.Error())
             continue
         }
 
@@ -153,7 +201,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         }
         key, err := datastore.Put(context, datastore.NewIncompleteKey(context, registry, nil), &entry)
         if err != nil {
-            context.Errorf("the list of %s is not put. message: %s", key, err.Error())
+            context.Errorf("the list of %s is not put.\nmessage: %s", key, err.Error())
             continue
         }
     }
