@@ -49,18 +49,11 @@ func cronHandler(w http.ResponseWriter, r *http.Request) {
         })
         taskqueue.Add(context, task, "")
         context.Infof("Added %s of taskqueue.", rir)
-        break
     }
 }
 
-type UpdateDateStore struct {
-    Registry string
-    Date     string
-}
-
-type IPStore struct {
-    Country string
-    Data    []byte
+type Store struct {
+    Data []byte
 }
 
 func updateHandler(w http.ResponseWriter, r *http.Request) {
@@ -92,57 +85,26 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    err = datastore.RunInTransaction(context, func(c appengine.Context) error {
-        var uds []UpdateDateStore
-        query := datastore.NewQuery(DATEKIND)
-        query.Filter("Registry =", registry)
-        keys, err := query.GetAll(context, &uds)
+    // To get the date of ip list. and check.
+    old_date := new(Store)
+    key := datastore.NewKey(context, DATEKIND, registry, 0, nil)
+    if err := datastore.Get(context, key, old_date); err == nil {
+        if bytes.Equal(old_date.Data, date[1]) {
+            context.Infof("%s is last update. so this update is end.", DATEKIND)
+            return
+        }
+        err = datastore.Delete(context, key)
         if err != nil {
-            context.Criticalf("I can't the query of %s.\nmessage: %s", DATEKIND, err.Error())
-            return err
-        } else {
-            if len(keys) == 0 {
-                context.Infof("The %s of %s on datastore wasn't find.\n"+
-                    " therefore the update is starting.", DATEKIND, registry)
-            } else {
-                var old_date UpdateDateStore
-                err = datastore.Get(context, keys[0], &old_date)
-                if err != nil {
-                    context.Criticalf("I can't get consistent contents "+
-                        "to ipHeaderCheckRegex.\nmessage: %s", err.Error())
-                    return err
-                }
-                if old_date.Date == string(date[1]) {
-                    e := fmt.Errorf("%s is last update. so this update is end.", DATEKIND)
-                    context.Infof(e.Error())
-                    return e
-                } else {
-                    err = datastore.DeleteMulti(context, keys)
-                    if err != nil {
-                        context.Criticalf("I can't delete %s.\nmessage: %s", DATEKIND, err.Error())
-                        return err
-                    }
-                }
-            }
+            context.Criticalf("I can't delete %s.\nmessage: %s", DATEKIND, err.Error())
+            return
         }
-        context.Infof("The list of %s is starting update.", registry)
-
-        // To write the new date of a registry.
-        entry := UpdateDateStore{
-            Registry: registry,
-            Date:     string(date[1]),
-        }
-        key, err := datastore.Put(context, datastore.NewIncompleteKey(context, DATEKIND, nil), &entry)
-        if err != nil {
-            context.Criticalf("the list of %s is not put.\nmessage: %s", key, err.Error())
-            return err
-        }
-        return err
-    }, nil)
-    if err != nil {
-        context.Errorf("Transaction failed: %v", err)
+    } else if err == datastore.ErrNoSuchEntity {
+        context.Infof("%s in %s wasn't found. so I add the new date.", registry, DATEKIND)
+    } else {
+        context.Criticalf("I can't get %s : %s.\nmessage: %s", DATEKIND, registry, err.Error())
         return
     }
+    context.Infof("The list of %s is starting update.", registry)
 
     result := ipCheckRegex.FindAllSubmatch(contents, -1)
     if result == nil {
@@ -182,45 +144,57 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
     iplist = optimize(iplist)
     context.Infof("optimize end. %s", registry)
 
-    // To delete old registry on datastore.
     err = datastore.RunInTransaction(context, func(c appengine.Context) error {
-        var u []IPStore
+        // To delete old registry on datastore.
+        var u []Store
         query := datastore.NewQuery(registry)
         keys, err := query.GetAll(context, &u)
         if err != nil {
             context.Errorf("I can't query %s.\nmessage: %s", registry, err.Error())
             return err
         }
-        if len(keys) > 0 {
-            err := datastore.DeleteMulti(context, keys)
-            if err != nil {
-                context.Errorf("I can't delete %s.\nmessage: %s", registry, err.Error())
-                return err
-            }
+
+        err = datastore.DeleteMulti(context, keys)
+        if err != nil {
+            context.Errorf("I can't delete %s.\nmessage: %s", registry, err.Error())
+            return err
         }
 
         // To add the countries of the registry on datastore.
         for country, list := range iplist {
-            var jsonbuf bytes.Buffer
             jd, err := json.Marshal(list)
-            jsonbuf.Write(jd)
             if err != nil {
                 context.Errorf("the list isn't converted.\nmessage: %s", err.Error())
                 return err
             }
+            jsonbuf := new(bytes.Buffer)
+            jsonbuf.Write(jd)
 
-            entry := IPStore{
-                Country: country,
-                Data:    jsonbuf.Bytes(),
+            entry := Store{
+                Data: jsonbuf.Bytes(),
             }
-            key, err := datastore.Put(context, datastore.NewIncompleteKey(context, registry, nil), &entry)
+            key, err := datastore.Put(context, datastore.NewKey(context, registry, country, 0, nil), &entry)
             if err != nil {
                 context.Errorf("the list of %s is not put.\nmessage: %s", key, err.Error())
                 return err
             }
         }
+
+        // To write the new date of a registry.
+        entry := Store{
+            Data: date[1],
+        }
+        key, err := datastore.Put(context, datastore.NewKey(context, DATEKIND, registry, 0, nil), &entry)
+        if err != nil {
+            context.Criticalf("the list of %s wasn't wrote date.\nmessage: %s", key, err.Error())
+            return err
+        }
         return err
     }, nil)
+    if err != nil {
+        context.Errorf("Transaction failed: %v", err)
+        return
+    }
 }
 
 func concat(left, right []IPType) []IPType {
