@@ -1,0 +1,11 @@
+indexes:
+- kind: UpdateDateStore
+  properties:
+  - name: Registry
+    direction: asc
+  - name: Date
+- kind: IPStore
+  properties:
+  - name: Country
+    direction: asc
+  - name: Data
