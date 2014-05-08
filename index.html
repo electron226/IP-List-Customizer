@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <!-- <meta name="description" content="">
+    <meta name="keywords" content=""> -->
+    <title>IP List Customizer</title>
+    <!-- <link rel="shortcut icon" href="favicon.ico"> -->
+    <!-- <link type="text/css" rel="stylesheet" href="">
+    <script type="text/javascript" src=""></script> -->
+</head>
+<body>
+
+<div>Last Update: {{.Date |html}}</div>
+<div>Registries:<br>
+{{ range .Registries }}
+{{ . }}
+{{ end }}
+<div>Countries:<br>
+{{ range .Countries }}
+{{ . }}
+{{ end }}
+</div>
+
+</body>
+</html>
+

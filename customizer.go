@@ -9,10 +9,12 @@ import (
     "encoding/json"
     "fmt"
     "html"
+    "html/template"
     "io/ioutil"
     "net/http"
     "net/url"
     "regexp"
+    "runtime"
     "strconv"
 )
 
@@ -31,13 +33,76 @@ const DATEKIND = "LATEST_UPDATE"
 type IPType map[string]uint
 type IPListType map[string][]IPType
 
+type TemplateArguments struct {
+    Date       string
+    Countries  []string
+    Registries []string
+}
+
+var template_cache = new(template.Template)
+var arguments = new(TemplateArguments)
+
+func initCache() {
+    template_cache = new(template.Template)
+    arguments = new(TemplateArguments)
+}
+
 func handler(w http.ResponseWriter, r *http.Request) {
+    context := appengine.NewContext(r)
+
+    if arguments.Date != "" && template_cache.Tree != nil {
+        template_cache.Execute(w, arguments)
+        return
+    }
+
+    // Get the catalogue of the registries.
+    var u []Store
+    query := datastore.NewQuery(DATEKIND)
+    keys, err := query.GetAll(context, &u)
+    if err != nil {
+        _, file, errorLine, _ := runtime.Caller(0)
+        fmt.Fprintf(w, "I can't query %s.\nmessage: %s\nfile: %s\nline: %d",
+            DATEKIND, err.Error(), file, errorLine)
+    }
+    for _, v := range keys {
+        arguments.Registries = append(arguments.Registries, v.StringID())
+    }
+
+    // Get the date of last update.
+    s := new(Store)
+    key := datastore.NewKey(context, DATEKIND, "AFRINIC", 0, nil)
+    if err := datastore.Get(context, key, s); err != nil {
+        arguments.Date = "Unknown"
+    } else {
+        arguments.Date = string(s.Data)
+    }
+
+    // Get the catalogue of the countries.
+    for registry, _ := range rirList {
+        var u []Store
+        query := datastore.NewQuery(registry)
+        keys, err := query.GetAll(context, &u)
+        if err != nil {
+            _, file, errorLine, _ := runtime.Caller(0)
+            fmt.Fprintf(w, "I can't query %s.\nmessage: %s\nfile: %s\nline: %d",
+                registry, err.Error(), file, errorLine)
+        }
+        for _, v := range keys {
+            arguments.Countries = append(arguments.Countries, v.StringID())
+        }
+    }
+
+    t := template.Must(template.ParseFiles("index.html"))
+    template_cache = t
+    template_cache.Execute(w, arguments)
+}
+
+func getHandler(w http.ResponseWriter, r *http.Request) {
     /* context := appengine.NewContext(r) */
     r.ParseForm()
     for key, value := range r.Form {
         fmt.Fprintf(w, "%s : %s\n", key, value)
     }
-    fmt.Fprint(w, "Hello, world!")
 }
 
 func cronHandler(w http.ResponseWriter, r *http.Request) {
@@ -66,22 +131,28 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
     client := urlfetch.Client(context)
     resp, err := client.Get(update_url)
     if err != nil {
-        context.Criticalf("I can't get the ip list of registry: %s. message: %s", registry, err.Error())
+        _, file, errorLine, _ := runtime.Caller(0)
+        context.Criticalf("I can't get the ip list of registry: %s.\n"+
+            "message: %s\nfile: %s\nline: %s", registry, err.Error(), file, errorLine)
         return
     }
     defer resp.Body.Close()
 
     contents, err := ioutil.ReadAll(resp.Body)
     if err != nil {
-        context.Criticalf("I can't get contents: %s.\nmessage: %s", registry, err.Error())
+        _, file, errorLine, _ := runtime.Caller(0)
+        context.Criticalf("I can't get contents: %s.\nmessage: %s"+
+            "\nfile: %s\nline: %s", registry, err.Error(), file, errorLine)
         return
     }
 
     // To checked the date of latest update, and old update date.
     date := ipHeaderCheckRegex.FindSubmatch(contents)
     if date == nil {
+        _, file, errorLine, _ := runtime.Caller(0)
         context.Criticalf("I can't get consistent contents "+
-            "to ipHeaderCheckRegex.\nmessage: %s", err.Error())
+            "to ipHeaderCheckRegex.\nmessage: %s\nfile: %s\nline: %s",
+            err.Error(), file, errorLine)
         return
     }
 
@@ -95,34 +166,44 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         }
         err = datastore.Delete(context, key)
         if err != nil {
-            context.Criticalf("I can't delete %s.\nmessage: %s", DATEKIND, err.Error())
+            _, file, errorLine, _ := runtime.Caller(0)
+            context.Criticalf("I can't delete %s.\nmessage: %s\n"+
+                "file: %s\nline: %s", DATEKIND, err.Error(), file, errorLine)
             return
         }
     } else if err == datastore.ErrNoSuchEntity {
         context.Infof("%s in %s wasn't found. so I add the new date.", registry, DATEKIND)
     } else {
-        context.Criticalf("I can't get %s : %s.\nmessage: %s", DATEKIND, registry, err.Error())
+        _, file, errorLine, _ := runtime.Caller(0)
+        context.Criticalf("I can't get %s : %s.\nmessage: %s\n"+
+            "file: %s\nline: %s", DATEKIND, registry, err.Error(), file, errorLine)
         return
     }
     context.Infof("The list of %s is starting update.", registry)
 
     result := ipCheckRegex.FindAllSubmatch(contents, -1)
     if result == nil {
-        context.Criticalf("I can't get consistent contents to ipCheckRegex.\nmessage: %s", err.Error())
+        _, file, errorLine, _ := runtime.Caller(0)
+        context.Criticalf("I can't get consistent contents to ipCheckRegex.\n"+
+            "message: %s\nfile: %s\nline: %s", err.Error(), file, errorLine)
         return
     }
     iplist := make(IPListType)
     for _, line := range result {
         start, err := getIPtoUint(line[2])
         if err != nil {
-            context.Errorf("getIPtoInt is failed. ip = %s,\nmessage: %s", line[2], err.Error())
+            _, file, errorLine, _ := runtime.Caller(0)
+            context.Errorf("getIPtoInt is failed. ip = %s,\nmessage: %s\n"+
+                "file: %s\nline: %s", line[2], err.Error(), file, errorLine)
             continue
         }
         buf := bytes.NewBuffer(line[3])
         value, err := strconv.ParseUint(buf.String(), 10, 32)
         if err != nil {
+            _, file, errorLine, _ := runtime.Caller(0)
             context.Errorf("updateHandler is failed.\n"+
-                " The error can't convert bytes[] to int.\nmessage: %s", err.Error())
+                " The error can't convert bytes[] to int.\nmessage: %s\n"+
+                "file: %s\nline: %s", err.Error(), file, errorLine)
             continue
         }
         end := start + uint(value)
@@ -150,13 +231,17 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         query := datastore.NewQuery(registry)
         keys, err := query.GetAll(context, &u)
         if err != nil {
-            context.Errorf("I can't query %s.\nmessage: %s", registry, err.Error())
+            _, file, errorLine, _ := runtime.Caller(0)
+            context.Errorf("I can't query %s.\nmessage: %s\n"+
+                "file: %s\nline: %s", registry, err.Error(), file, errorLine)
             return err
         }
 
         err = datastore.DeleteMulti(context, keys)
         if err != nil {
-            context.Errorf("I can't delete %s.\nmessage: %s", registry, err.Error())
+            _, file, errorLine, _ := runtime.Caller(0)
+            context.Errorf("I can't delete %s.\nmessage: %s\n"+
+                "file: %s\nline: %s", registry, err.Error(), file, errorLine)
             return err
         }
 
@@ -164,7 +249,9 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         for country, list := range iplist {
             jd, err := json.Marshal(list)
             if err != nil {
-                context.Errorf("the list isn't converted.\nmessage: %s", err.Error())
+                _, file, errorLine, _ := runtime.Caller(0)
+                context.Errorf("the list isn't converted.\nmessage: %s\n"+
+                    "file: %s\nline: %s", err.Error(), file, errorLine)
                 return err
             }
             jsonbuf := new(bytes.Buffer)
@@ -175,7 +262,9 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
             }
             key, err := datastore.Put(context, datastore.NewKey(context, registry, country, 0, nil), &entry)
             if err != nil {
-                context.Errorf("the list of %s is not put.\nmessage: %s", key, err.Error())
+                _, file, errorLine, _ := runtime.Caller(0)
+                context.Errorf("the list of %s is not put.\nmessage: %s\n"+
+                    "file: %s\nline: %s", key, err.Error(), file, errorLine)
                 return err
             }
         }
@@ -186,7 +275,9 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         }
         key, err := datastore.Put(context, datastore.NewKey(context, DATEKIND, registry, 0, nil), &entry)
         if err != nil {
-            context.Criticalf("the list of %s wasn't wrote date.\nmessage: %s", key, err.Error())
+            _, file, errorLine, _ := runtime.Caller(0)
+            context.Criticalf("the list of %s wasn't wrote date.\nmessage: %s\n"+
+                "file: %s\nline: %s", key, err.Error(), file, errorLine)
             return err
         }
         return err
@@ -195,6 +286,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         context.Errorf("Transaction failed: %v", err)
         return
     }
+    initCache()
 }
 
 func concat(left, right []IPType) []IPType {
@@ -258,4 +350,5 @@ func init() {
     http.HandleFunc("/", handler)
     http.HandleFunc("/cron", cronHandler)
     http.HandleFunc("/update", updateHandler)
+    http.HandleFunc("/get", getHandler)
 }
