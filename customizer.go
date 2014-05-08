@@ -16,6 +16,7 @@ import (
     "regexp"
     "runtime"
     "strconv"
+    "time"
 )
 
 var rirList = map[string]string{
@@ -61,7 +62,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
     keys, err := query.GetAll(context, &u)
     if err != nil {
         _, file, errorLine, _ := runtime.Caller(0)
-        fmt.Fprintf(w, "I can't query %s.\nmessage: %s\nfile: %s\nline: %d",
+        fmt.Fprintf(w, "I can't query %s.\nmessage: %s\nfile: %s\nline: %v",
             DATEKIND, err.Error(), file, errorLine)
     }
     for _, v := range keys {
@@ -84,7 +85,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
         keys, err := query.GetAll(context, &u)
         if err != nil {
             _, file, errorLine, _ := runtime.Caller(0)
-            fmt.Fprintf(w, "I can't query %s.\nmessage: %s\nfile: %s\nline: %d",
+            fmt.Fprintf(w, "I can't query %s.\nmessage: %s\nfile: %s\nline: %v",
                 registry, err.Error(), file, errorLine)
         }
         for _, v := range keys {
@@ -128,7 +129,12 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
     update_url := html.UnescapeString(r.Form["url"][0])
     context.Infof("start update of ip list : %s", update_url)
 
-    client := urlfetch.Client(context)
+    client := &http.Client{
+        Transport: &urlfetch.Transport{
+            Context:  context,
+            Deadline: 60 * time.Second,
+        },
+    }
     resp, err := client.Get(update_url)
     if err != nil {
         _, file, errorLine, _ := runtime.Caller(0)
