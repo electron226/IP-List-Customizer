@@ -28,6 +28,7 @@ var rirList = map[string]string{
 }
 var ipCheckRegex = regexp.MustCompile("([a-zA-Z]{2})\\|ipv4\\|(\\d+.\\d+.\\d+.\\d+)\\|(\\d+)")
 var ipHeaderCheckRegex = regexp.MustCompile("[\\d.]+\\|[a-zA-Z]+\\|(\\d*)\\|\\d*\\|\\d*\\|\\d*\\|[+-]?\\d+")
+var dateCheckRegex = regexp.MustCompile("^(\\d{4})(\\d{2})(\\d{2})$")
 
 const DATEKIND = "LATEST_UPDATE"
 
@@ -65,17 +66,28 @@ func handler(w http.ResponseWriter, r *http.Request) {
         fmt.Fprintf(w, "I can't query %s.\nmessage: %s\nfile: %s\nline: %v",
             DATEKIND, err.Error(), file, errorLine)
     }
+    // To get the list of registries.
     for _, v := range keys {
         arguments.Registries = append(arguments.Registries, v.StringID())
     }
-
-    // Get the date of last update.
-    s := new(Store)
-    key := datastore.NewKey(context, DATEKIND, "AFRINIC", 0, nil)
-    if err := datastore.Get(context, key, s); err != nil {
-        arguments.Date = "Unknown"
+    // To get the lastet date of the list.
+    var latest_date time.Time
+    for _, v := range u {
+        r := dateCheckRegex.FindSubmatch(v.Data)
+        if r != nil {
+            year, _ := strconv.Atoi(string(r[1]))
+            month, _ := strconv.Atoi(string(r[2]))
+            day, _ := strconv.Atoi(string(r[3]))
+            t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
+            if latest_date.IsZero() || t.After(latest_date) {
+                latest_date = t
+            }
+        }
+    }
+    if latest_date.IsZero() {
+        arguments.Date = "Don't update."
     } else {
-        arguments.Date = string(s.Data)
+        arguments.Date = fmt.Sprintf("%d/%02d/%02d", latest_date.Year(), latest_date.Month(), latest_date.Day())
     }
 
     // Get the catalogue of the countries.
@@ -204,7 +216,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
             continue
         }
         buf := bytes.NewBuffer(line[3])
-        value, err := strconv.ParseUint(buf.String(), 10, 32)
+        value, err := strconv.Atoi(buf.String())
         if err != nil {
             _, file, errorLine, _ := runtime.Caller(0)
             context.Errorf("updateHandler is failed.\n"+
@@ -344,7 +356,7 @@ func getIPtoUint(ip []byte) (uint, error) {
     var shift_number uint = 24
     for _, i := range ips {
         buf := bytes.NewBuffer(i)
-        v, _ := strconv.ParseUint(buf.String(), 10, 32)
+        v, _ := strconv.Atoi(buf.String())
         start += uint(v) << shift_number
         shift_number -= 8
     }
