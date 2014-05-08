@@ -15,6 +15,7 @@ import (
     "net/url"
     "regexp"
     "runtime"
+    "sort"
     "strconv"
     "time"
 )
@@ -37,8 +38,8 @@ type IPListType map[string][]IPType
 
 type TemplateArguments struct {
     Date       string
-    Countries  []string
-    Registries []string
+    Countries  map[string]int
+    Registries sort.StringSlice
 }
 
 var template_cache = new(template.Template)
@@ -47,6 +48,7 @@ var arguments = new(TemplateArguments)
 func initCache() {
     template_cache = new(template.Template)
     arguments = new(TemplateArguments)
+    arguments.Countries = make(map[string]int)
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +72,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
     for _, v := range keys {
         arguments.Registries = append(arguments.Registries, v.StringID())
     }
+    arguments.Registries.Sort()
     // To get the lastet date of the list.
     var latest_date time.Time
     for _, v := range u {
@@ -101,8 +104,10 @@ func handler(w http.ResponseWriter, r *http.Request) {
                 registry, err.Error(), file, errorLine)
         }
         for _, v := range keys {
-            arguments.Countries = append(arguments.Countries, v.StringID())
+            arguments.Countries[v.StringID()]++
+            /* arguments.Countries = append(arguments.Countries, v.StringID()) */
         }
+        /* arguments.Countries.Sort() */
     }
 
     t := template.Must(template.ParseFiles("index.html"))
@@ -365,6 +370,8 @@ func getIPtoUint(ip []byte) (uint, error) {
 }
 
 func init() {
+    initCache()
+
     http.HandleFunc("/", handler)
     http.HandleFunc("/cron", cronHandler)
     http.HandleFunc("/update", updateHandler)

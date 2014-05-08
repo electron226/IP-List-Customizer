@@ -12,15 +12,14 @@
 <body>
 
 <div>Last Update: {{.Date |html}}</div>
-<div>Registries:<br>
+<div>Registries:</div>
 {{ range .Registries }}
-{{ . }}
+<input type="checkbox" id="{{ . | html }}">{{ . | html }}
 {{ end }}
-<div>Countries:<br>
-{{ range .Countries }}
-{{ . }}
+<div>Countries:</div>
+{{ range $c, $_ := .Countries }}
+<input type="checkbox" id="{{ $c | html }}">{{ $c | html }}
 {{ end }}
-</div>
 
 </body>
 </html>
