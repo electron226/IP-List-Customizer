@@ -105,9 +105,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
         }
         for _, v := range keys {
             arguments.Countries[v.StringID()]++
-            /* arguments.Countries = append(arguments.Countries, v.StringID()) */
         }
-        /* arguments.Countries.Sort() */
     }
 
     t := template.Must(template.ParseFiles("index.html"))

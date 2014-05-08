@@ -2,24 +2,87 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <!-- <meta name="description" content="">
-    <meta name="keywords" content=""> -->
+    <meta name="description" content="You can get the IP list of the registries. and it can customize.">
+    <meta name="keywords" content="IPv4 IPv6 IP-List-Customizer">
     <title>IP List Customizer</title>
-    <!-- <link rel="shortcut icon" href="favicon.ico"> -->
-    <!-- <link type="text/css" rel="stylesheet" href="">
-    <script type="text/javascript" src=""></script> -->
+    <link rel="shortcut icon" href="favicon.ico">
+    <style type="text/css" media="all">
+      article {
+        margin: 1em 0 1em 0;
+      }
+    </style>
+    <script type="text/javascript" charset="utf-8">
+    document.addEventListener('DOMContentLoaded', function() {
+      var countries = document.getElementById('countries');
+      var count = 0;
+      var t = document.createElement('table');
+      var tr;
+      {{ range $c, $_ := .Countries }}
+        if (count++ % 10 == 0) {
+          if (tr) {
+            countries.appendChild(tr);
+          }
+          tr = document.createElement('tr');
+        }
+        var th = document.createElement('td');
+
+        var l = document.createElement('label');
+
+        var e = document.createElement('input');
+        e.setAttribute('type', 'checkbox')
+        e.setAttribute('name', {{ $c | html }})
+
+        l.appendChild(e);
+        l.appendChild(document.createTextNode({{ $c | html }}))
+        th.appendChild(l);
+
+        tr.appendChild(th);
+      {{ end }}
+      countries.appendChild(tr);
+    }, false);
+    </script>
 </head>
 <body>
 
-<div>Last Update: {{.Date |html}}</div>
-<div>Registries:</div>
-{{ range .Registries }}
-<input type="checkbox" id="{{ . | html }}">{{ . | html }}
-{{ end }}
-<div>Countries:</div>
-{{ range $c, $_ := .Countries }}
-<input type="checkbox" id="{{ $c | html }}">{{ $c | html }}
-{{ end }}
+<header>
+  <div>Last Update: {{.Date |html}}</div>
+</header>
+
+<form action="/get" method="get">
+  <section>
+    <article>
+      <div>Custom Text:</div>
+      <div>
+        <input type="text" name="custom" id="custom" value="{CC}: {START}-{END}">
+      </div>
+      <div>The meaning of the text:</div>
+      <div>
+      {REG} = Registry<br>
+      {CC} = Country<br>
+      {START} = The start of IP<br>
+      {END} = The end of IP<br>
+      </div>
+    </article>
+    <article>
+      <div>Registries:</div>
+      <div id="registries">
+        {{ range .Registries }}
+        <label><input type="checkbox" name="{{ . | html }}">{{ . | html }}</label>
+        {{ end }}
+      </div>
+    </article>
+    <article>
+      <div>Countries:</div>
+      <div id="countries">
+      </div>
+    </article>
+  </section>
+
+  <footer>
+    <input type="submit" id="submit" value="Submit">
+    <input type="reset" id="reset" value="Reset">
+  </footer>
+</form>
 
 </body>
 </html>
