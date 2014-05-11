@@ -36,44 +36,66 @@ const DATEKIND = "LATEST_UPDATE"
 type IPType map[string]uint
 type IPListType map[string][]IPType
 
+type Store struct {
+    Data []byte
+}
+
 type TemplateArguments struct {
     Date       string
     Countries  map[string]int
     Registries sort.StringSlice
 }
 
-var template_cache = new(template.Template)
+var templateCache = new(template.Template)
 var arguments = new(TemplateArguments)
 
 func initCache() {
-    template_cache = new(template.Template)
+    templateCache = new(template.Template)
     arguments = new(TemplateArguments)
     arguments.Countries = make(map[string]int)
+}
+
+func getKeysOnDS(c appengine.Context, kind string) ([]*datastore.Key, []Store, error) {
+    var u []Store
+    query := datastore.NewQuery(kind)
+    keys, err := query.GetAll(c, &u)
+    if err != nil {
+        _, file, errorLine, _ := runtime.Caller(0)
+        return nil, nil, fmt.Errorf("I can't query %s.\nmessage: %s\nfile: %s\nline: %v",
+            DATEKIND, err.Error(), file, errorLine)
+    }
+    return keys, u, err
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
     context := appengine.NewContext(r)
 
-    if arguments.Date != "" && template_cache.Tree != nil {
-        template_cache.Execute(w, arguments)
+    if arguments.Date != "" && templateCache.Tree != nil {
+        templateCache.Execute(w, arguments)
         return
     }
 
     // Get the catalogue of the registries.
-    var u []Store
-    query := datastore.NewQuery(DATEKIND)
-    keys, err := query.GetAll(context, &u)
+    keys, _, err := getKeysOnDS(context, DATEKIND)
     if err != nil {
-        _, file, errorLine, _ := runtime.Caller(0)
-        fmt.Fprintf(w, "I can't query %s.\nmessage: %s\nfile: %s\nline: %v",
-            DATEKIND, err.Error(), file, errorLine)
+        fmt.Fprintf(w, err.Error())
     }
     // To get the list of registries.
     for _, v := range keys {
         arguments.Registries = append(arguments.Registries, v.StringID())
     }
     arguments.Registries.Sort()
-    // To get the lastet date of the list.
+
+    // To get the latest date of the list.
+    u := make([]Store, len(keys))
+    err = datastore.GetMulti(context, keys, u)
+    if err != nil {
+        _, file, errorLine, _ := runtime.Caller(0)
+        fmt.Fprintf(w,
+            "I can't get latest dates.\nmessage: %s\nfile: %s\nline: %v",
+            err.Error(), file, errorLine)
+    }
+
     var latest_date time.Time
     for _, v := range u {
         r := dateCheckRegex.FindSubmatch(v.Data)
@@ -90,11 +112,12 @@ func handler(w http.ResponseWriter, r *http.Request) {
     if latest_date.IsZero() {
         arguments.Date = "Don't update."
     } else {
-        arguments.Date = fmt.Sprintf("%d/%02d/%02d", latest_date.Year(), latest_date.Month(), latest_date.Day())
+        arguments.Date = fmt.Sprintf(
+            "%d/%02d/%02d", latest_date.Year(), latest_date.Month(), latest_date.Day())
     }
 
     // Get the catalogue of the countries.
-    for registry, _ := range rirList {
+    for _, registry := range arguments.Registries {
         var u []Store
         query := datastore.NewQuery(registry)
         keys, err := query.GetAll(context, &u)
@@ -109,15 +132,54 @@ func handler(w http.ResponseWriter, r *http.Request) {
     }
 
     t := template.Must(template.ParseFiles("index.html"))
-    template_cache = t
-    template_cache.Execute(w, arguments)
+    templateCache = t
+    templateCache.Execute(w, arguments)
 }
 
 func getHandler(w http.ResponseWriter, r *http.Request) {
-    /* context := appengine.NewContext(r) */
+    context := appengine.NewContext(r)
+
+    // Get the catalogue of the registries.
+    keys, _, err := getKeysOnDS(context, DATEKIND)
+    if err != nil {
+        fmt.Fprintf(w, err.Error())
+    }
+
+    // To get the list of registries.
+    var regs sort.StringSlice
+    for _, v := range keys {
+        regs = append(regs, v.StringID())
+    }
+    regs.Sort()
+
     r.ParseForm()
-    for key, value := range r.Form {
-        fmt.Fprintf(w, "%s : %s\n", key, value)
+    for key, _ := range r.Form {
+        for _, r := range regs {
+            if key == r {
+                keys, u, err := getKeysOnDS(context, r)
+                if err != nil {
+                    fmt.Fprintf(w, err.Error())
+                    continue
+                }
+
+                for i, v := range u {
+                    var ips []IPType
+                    err = json.Unmarshal(v.Data, &ips)
+                    if err != nil {
+                        _, file, errorLine, _ := runtime.Caller(0)
+                        fmt.Fprintf(w,
+                            "I can't get the json data.\nmessage: %s\nfile: %s\nline: %v",
+                            err.Error(), file, errorLine)
+                        continue
+                    }
+
+                    for _, v2 := range ips {
+                        fmt.Fprintf(w, "%s - %s: %s-%s\n",
+                            r, keys[i].StringID(), getUintToIP(v2["start"]), getUintToIP(v2["end"]))
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -131,10 +193,6 @@ func cronHandler(w http.ResponseWriter, r *http.Request) {
         taskqueue.Add(context, task, "")
         context.Infof("Added %s of taskqueue.", rir)
     }
-}
-
-type Store struct {
-    Data []byte
 }
 
 func updateHandler(w http.ResponseWriter, r *http.Request) {
@@ -248,13 +306,9 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 
     err = datastore.RunInTransaction(context, func(c appengine.Context) error {
         // To delete old registry on datastore.
-        var u []Store
-        query := datastore.NewQuery(registry)
-        keys, err := query.GetAll(context, &u)
+        keys, _, err := getKeysOnDS(context, registry)
         if err != nil {
-            _, file, errorLine, _ := runtime.Caller(0)
-            context.Errorf("I can't query %s.\nmessage: %s\n"+
-                "file: %s\nline: %s", registry, err.Error(), file, errorLine)
+            context.Errorf(err.Error())
             return err
         }
 
