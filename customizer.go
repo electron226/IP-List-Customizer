@@ -64,7 +64,7 @@ func getKeysOnDS(c appengine.Context, kind string) ([]*datastore.Key, []Store, e
     keys, err := query.GetAll(c, &u)
     if err != nil {
         _, file, errorLine, _ := runtime.Caller(0)
-        return nil, nil, fmt.Errorf("I can't query %s.\nmessage: %s\nfile: %s\nline: %v",
+        return nil, nil, fmt.Errorf("I can't query %s.\nmessage: %s\nfile: %s\nline: %d",
             DATEKIND, err.Error(), file, errorLine)
     }
     return keys, u, err
@@ -95,7 +95,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         _, file, errorLine, _ := runtime.Caller(0)
         fmt.Fprintf(w,
-            "I can't get latest dates.\nmessage: %s\nfile: %s\nline: %v",
+            "I can't get latest dates.\nmessage: %s\nfile: %s\nline: %d",
             err.Error(), file, errorLine)
     }
 
@@ -126,7 +126,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
         keys, err := query.GetAll(context, &u)
         if err != nil {
             _, file, errorLine, _ := runtime.Caller(0)
-            fmt.Fprintf(w, "I can't query %s.\nmessage: %s\nfile: %s\nline: %v",
+            fmt.Fprintf(w, "I can't query %s.\nmessage: %s\nfile: %s\nline: %d",
                 registry, err.Error(), file, errorLine)
         }
         for _, v := range keys {
@@ -167,14 +167,14 @@ func createAllCacheOnDS(context appengine.Context) (map[string]IPListType, error
             if err != nil {
                 _, file, errorLine, _ := runtime.Caller(0)
                 return nil, fmt.Errorf(
-                    "I can't get the json data.\nmessage: %s\nfile: %s\nline: %v",
+                    "I can't get the json data.\nmessage: %s\nfile: %s\nline: %d",
                     err.Error(), file, errorLine)
             }
 
             if cache[r][keys[i].StringID()] != nil {
                 _, file, errorLine, _ := runtime.Caller(0)
                 return nil, fmt.Errorf(
-                    "The cache data already have gotten.\nfile: %s\nline: %v",
+                    "The cache data already have gotten.\nfile: %s\nline: %d",
                     file, errorLine)
             }
             cache[r][keys[i].StringID()] = ips
@@ -238,7 +238,7 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
                         return m
                     },
                 )
-                fmt.Fprintf(w, "%s\n", text)
+                fmt.Fprintln(w, text)
             }
         }
     }
@@ -273,7 +273,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         _, file, errorLine, _ := runtime.Caller(0)
         context.Criticalf("I can't get the ip list of registry: %s.\n"+
-            "message: %s\nfile: %s\nline: %s", registry, err.Error(), file, errorLine)
+            "message: %s\nfile: %s\nline: %d", registry, err.Error(), file, errorLine)
         return
     }
     defer resp.Body.Close()
@@ -282,7 +282,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         _, file, errorLine, _ := runtime.Caller(0)
         context.Criticalf("I can't get contents: %s.\nmessage: %s"+
-            "\nfile: %s\nline: %s", registry, err.Error(), file, errorLine)
+            "\nfile: %s\nline: %d", registry, err.Error(), file, errorLine)
         return
     }
 
@@ -291,7 +291,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
     if date == nil {
         _, file, errorLine, _ := runtime.Caller(0)
         context.Criticalf("I can't get consistent contents "+
-            "to ipHeaderCheckRegex.\nmessage: %s\nfile: %s\nline: %s",
+            "to ipHeaderCheckRegex.\nmessage: %s\nfile: %s\nline: %d",
             err.Error(), file, errorLine)
         return
     }
@@ -308,7 +308,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         if err != nil {
             _, file, errorLine, _ := runtime.Caller(0)
             context.Criticalf("I can't delete %s.\nmessage: %s\n"+
-                "file: %s\nline: %s", DATEKIND, err.Error(), file, errorLine)
+                "file: %s\nline: %d", DATEKIND, err.Error(), file, errorLine)
             return
         }
     } else if err == datastore.ErrNoSuchEntity {
@@ -316,7 +316,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
     } else {
         _, file, errorLine, _ := runtime.Caller(0)
         context.Criticalf("I can't get %s : %s.\nmessage: %s\n"+
-            "file: %s\nline: %s", DATEKIND, registry, err.Error(), file, errorLine)
+            "file: %s\nline: %d", DATEKIND, registry, err.Error(), file, errorLine)
         return
     }
     context.Infof("The list of %s is starting update.", registry)
@@ -325,7 +325,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
     if result == nil {
         _, file, errorLine, _ := runtime.Caller(0)
         context.Criticalf("I can't get consistent contents to ipCheckRegex.\n"+
-            "message: %s\nfile: %s\nline: %s", err.Error(), file, errorLine)
+            "message: %s\nfile: %s\nline: %d", err.Error(), file, errorLine)
         return
     }
     iplist := make(IPListType)
@@ -334,7 +334,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         if err != nil {
             _, file, errorLine, _ := runtime.Caller(0)
             context.Errorf("getIPtoInt is failed. ip = %s,\nmessage: %s\n"+
-                "file: %s\nline: %s", line[2], err.Error(), file, errorLine)
+                "file: %s\nline: %d", line[2], err.Error(), file, errorLine)
             continue
         }
         buf := bytes.NewBuffer(line[3])
@@ -343,7 +343,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
             _, file, errorLine, _ := runtime.Caller(0)
             context.Errorf("updateHandler is failed.\n"+
                 " The error can't convert bytes[] to int.\nmessage: %s\n"+
-                "file: %s\nline: %s", err.Error(), file, errorLine)
+                "file: %s\nline: %d", err.Error(), file, errorLine)
             continue
         }
         end := start + uint(value)
@@ -377,7 +377,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         if err != nil {
             _, file, errorLine, _ := runtime.Caller(0)
             context.Errorf("I can't delete %s.\nmessage: %s\n"+
-                "file: %s\nline: %s", registry, err.Error(), file, errorLine)
+                "file: %s\nline: %d", registry, err.Error(), file, errorLine)
             return err
         }
 
@@ -387,7 +387,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
             if err != nil {
                 _, file, errorLine, _ := runtime.Caller(0)
                 context.Errorf("the list isn't converted.\nmessage: %s\n"+
-                    "file: %s\nline: %s", err.Error(), file, errorLine)
+                    "file: %s\nline: %d", err.Error(), file, errorLine)
                 return err
             }
             jsonbuf := new(bytes.Buffer)
@@ -400,7 +400,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
             if err != nil {
                 _, file, errorLine, _ := runtime.Caller(0)
                 context.Errorf("the list of %s is not put.\nmessage: %s\n"+
-                    "file: %s\nline: %s", key, err.Error(), file, errorLine)
+                    "file: %s\nline: %d", key, err.Error(), file, errorLine)
                 return err
             }
         }
@@ -413,7 +413,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
         if err != nil {
             _, file, errorLine, _ := runtime.Caller(0)
             context.Criticalf("the list of %s wasn't wrote date.\nmessage: %s\n"+
-                "file: %s\nline: %s", key, err.Error(), file, errorLine)
+                "file: %s\nline: %d", key, err.Error(), file, errorLine)
             return err
         }
         return err
