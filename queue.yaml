@@ -1,3 +1,0 @@
-﻿queue:
-- name: update
-  rate: 5.00/s
