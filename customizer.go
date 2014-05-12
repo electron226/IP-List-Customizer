@@ -30,6 +30,7 @@ var rirList = map[string]string{
 var ipCheckRegex = regexp.MustCompile("([a-zA-Z]{2})\\|ipv4\\|(\\d+.\\d+.\\d+.\\d+)\\|(\\d+)")
 var ipHeaderCheckRegex = regexp.MustCompile("[\\d.]+\\|[a-zA-Z]+\\|(\\d*)\\|\\d*\\|\\d*\\|\\d*\\|[+-]?\\d+")
 var dateCheckRegex = regexp.MustCompile("^(\\d{4})(\\d{2})(\\d{2})$")
+var replaceCheckRegex = regexp.MustCompile("{[A-Z]+}")
 
 const DATEKIND = "LATEST_UPDATE"
 
@@ -48,11 +49,13 @@ type TemplateArguments struct {
 
 var templateCache = new(template.Template)
 var arguments = new(TemplateArguments)
+var listCache = make(map[string]IPListType)
 
 func initCache() {
     templateCache = new(template.Template)
     arguments = new(TemplateArguments)
     arguments.Countries = make(map[string]int)
+    listCache = make(map[string]IPListType)
 }
 
 func getKeysOnDS(c appengine.Context, kind string) ([]*datastore.Key, []Store, error) {
@@ -136,13 +139,11 @@ func handler(w http.ResponseWriter, r *http.Request) {
     templateCache.Execute(w, arguments)
 }
 
-func getHandler(w http.ResponseWriter, r *http.Request) {
-    context := appengine.NewContext(r)
-
+func createAllCacheOnDS(context appengine.Context) (map[string]IPListType, error) {
     // Get the catalogue of the registries.
     keys, _, err := getKeysOnDS(context, DATEKIND)
     if err != nil {
-        fmt.Fprintf(w, err.Error())
+        return nil, fmt.Errorf("%v", err.Error())
     }
 
     // To get the list of registries.
@@ -152,32 +153,92 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
     }
     regs.Sort()
 
+    var ips []IPType
+    cache := make(map[string]IPListType)
+    for _, r := range regs {
+        keys, u, err := getKeysOnDS(context, r)
+        if err != nil {
+            return nil, fmt.Errorf("%v", err.Error())
+        }
+
+        cache[r] = make(IPListType)
+        for i, v := range u {
+            err = json.Unmarshal(v.Data, &ips)
+            if err != nil {
+                _, file, errorLine, _ := runtime.Caller(0)
+                return nil, fmt.Errorf(
+                    "I can't get the json data.\nmessage: %s\nfile: %s\nline: %v",
+                    err.Error(), file, errorLine)
+            }
+
+            if cache[r][keys[i].StringID()] != nil {
+                _, file, errorLine, _ := runtime.Caller(0)
+                return nil, fmt.Errorf(
+                    "The cache data already have gotten.\nfile: %s\nline: %v",
+                    file, errorLine)
+            }
+            cache[r][keys[i].StringID()] = ips
+        }
+    }
+    return cache, nil
+}
+
+func getHandler(w http.ResponseWriter, r *http.Request) {
+    context := appengine.NewContext(r)
+
     r.ParseForm()
-    for key, _ := range r.Form {
-        for _, r := range regs {
-            if key == r {
-                keys, u, err := getKeysOnDS(context, r)
-                if err != nil {
-                    fmt.Fprintf(w, err.Error())
-                    continue
-                }
 
-                for i, v := range u {
-                    var ips []IPType
-                    err = json.Unmarshal(v.Data, &ips)
-                    if err != nil {
-                        _, file, errorLine, _ := runtime.Caller(0)
-                        fmt.Fprintf(w,
-                            "I can't get the json data.\nmessage: %s\nfile: %s\nline: %v",
-                            err.Error(), file, errorLine)
-                        continue
-                    }
+    if len(listCache) == 0 {
+        cache, err := createAllCacheOnDS(context)
+        if err != nil {
+            fmt.Fprintf(w, "%v", err.Error())
+            return
+        }
+        listCache = cache
+    }
 
-                    for _, v2 := range ips {
-                        fmt.Fprintf(w, "%s - %s: %s-%s\n",
-                            r, keys[i].StringID(), getUintToIP(v2["start"]), getUintToIP(v2["end"]))
-                    }
+    outputList := make(map[string]map[string]bool)
+    for reg, v := range listCache {
+        if r.Form[reg] != nil {
+            t := make(map[string]bool)
+            for c, _ := range v {
+                t[c] = true
+            }
+            outputList[reg] = t
+        } else {
+            t := make(map[string]bool)
+            for c, _ := range v {
+                if r.Form[c] != nil {
+                    t[c] = true
                 }
+            }
+            if len(t) > 0 {
+                outputList[reg] = t
+            }
+        }
+    }
+
+    customString := r.Form["custom"][0]
+    for reg, v := range outputList {
+        for cc, _ := range v {
+            for _, ip := range listCache[reg][cc] {
+                text := replaceCheckRegex.ReplaceAllStringFunc(
+                    customString,
+                    func(m string) string {
+                        switch m {
+                        case "{REG}":
+                            return reg
+                        case "{CC}":
+                            return cc
+                        case "{START}":
+                            return string(getUintToIP(ip["start"]))
+                        case "{END}":
+                            return string(getUintToIP(ip["end"]))
+                        }
+                        return m
+                    },
+                )
+                fmt.Fprintf(w, "%s\n", text)
             }
         }
     }
