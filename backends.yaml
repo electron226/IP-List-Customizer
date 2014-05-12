@@ -1,0 +1,4 @@
+backends:
+- name: updatebackend
+  class: B1
+  instances: 5

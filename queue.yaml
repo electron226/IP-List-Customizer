@@ -1,0 +1,4 @@
+queue:
+- name: update
+  rate: 5/s
+  target: updatebackend

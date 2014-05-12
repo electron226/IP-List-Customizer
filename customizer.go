@@ -246,14 +246,17 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 
 func cronHandler(w http.ResponseWriter, r *http.Request) {
     context := appengine.NewContext(r)
+    var taskList []*taskqueue.Task
     for rir, u := range rirList {
         task := taskqueue.NewPOSTTask("/update", url.Values{
             "registry": {html.EscapeString(rir)},
             "url":      {html.EscapeString(u)},
         })
-        taskqueue.Add(context, task, "")
+        task.Header.Set("Host", appengine.BackendHostname(context, "updatebackend", 1))
+        taskList = append(taskList, task)
         context.Infof("Added %s of taskqueue.", rir)
     }
+    taskqueue.AddMulti(context, taskList, "update")
 }
 
 func updateHandler(w http.ResponseWriter, r *http.Request) {
@@ -266,7 +269,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
     client := &http.Client{
         Transport: &urlfetch.Transport{
             Context:  context,
-            Deadline: 60 * time.Second,
+            Deadline: 5 * time.Minute,
         },
     }
     resp, err := client.Get(update_url)
