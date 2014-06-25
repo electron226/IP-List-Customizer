@@ -106,6 +106,12 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			year, _ := strconv.Atoi(string(r[1]))
 			month, _ := strconv.Atoi(string(r[2]))
 			day, _ := strconv.Atoi(string(r[3]))
+			if err != nil {
+				_, file, errorLine, _ := runtime.Caller(0)
+				fmt.Fprintf(w,
+					"I don't get latest date.\nfile: %s\nline: %d", file, errorLine)
+				continue
+			}
 			t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
 			if latest_date.IsZero() || t.After(latest_date) {
 				latest_date = t
