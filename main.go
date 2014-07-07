@@ -272,16 +272,13 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	update_url := html.UnescapeString(r.Form["url"][0])
 	context.Infof("start update of ip list : %s", update_url)
 
-	tr := &urlfetch.Transport{
-		Context:  context,
-		Deadline: 5 * time.Minute,
-	}
-	client := &http.Client{Transport: tr}
+	client := urlfetch.Client(context)
 	resp, err := client.Get(update_url)
 	if err != nil {
 		_, file, errorLine, _ := runtime.Caller(0)
 		context.Criticalf("I can't get the ip list of registry: %s.\n"+
-			"message: %s\nfile: %s\nline: %d", registry, err.Error(), file, errorLine)
+			"message: %s\ncode: %d\nfile: %s\nline: %d", registry, err.Error(),
+			http.StatusInternalServerError, file, errorLine)
 		return
 	}
 	defer resp.Body.Close()
