@@ -1,10 +1,6 @@
 package main
 
 import (
-	"appengine"
-	"appengine/datastore"
-	"appengine/taskqueue"
-	"appengine/urlfetch"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -18,6 +14,11 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"appengine"
+	"appengine/datastore"
+	"appengine/taskqueue"
+	"appengine/urlfetch"
 )
 
 var rirList = map[string]string{
