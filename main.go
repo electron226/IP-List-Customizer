@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"html/template"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 
 	"appengine"
 	"appengine/datastore"
+	"appengine/memcache"
 	"appengine/taskqueue"
 	"appengine/urlfetch"
 )
@@ -34,6 +36,7 @@ var dateCheckRegex = regexp.MustCompile("^(\\d{4})(\\d{2})(\\d{2})$")
 var replaceCheckRegex = regexp.MustCompile("{[A-Z]+}")
 
 const DATEKIND = "LATEST_UPDATE"
+const MEMCACHE_TEMPLATE = "TEMPLATE"
 
 type IPType map[string]uint
 type IPListType map[string][]IPType
@@ -48,15 +51,25 @@ type TemplateArguments struct {
 	Registries sort.StringSlice
 }
 
-var templateCache = new(template.Template)
-var arguments = new(TemplateArguments)
 var listCache = make(map[string]IPListType)
 
 func initCache() {
-	templateCache = new(template.Template)
-	arguments = new(TemplateArguments)
-	arguments.Countries = make(map[string]int)
 	listCache = make(map[string]IPListType)
+}
+
+type WriterForMim struct {
+	io.Writer
+
+	Data bytes.Buffer
+}
+
+func (p *WriterForMim) Write(b []byte) (n int, err error) {
+	p.Data.Write(b)
+	return p.Data.Len(), nil
+}
+
+func (p *WriterForMim) GetBytes() []byte {
+	return p.Data.Bytes()
 }
 
 func getKeysOnDS(c appengine.Context, kind string) ([]*datastore.Key, []Store, error) {
@@ -74,77 +87,94 @@ func getKeysOnDS(c appengine.Context, kind string) ([]*datastore.Key, []Store, e
 func handler(w http.ResponseWriter, r *http.Request) {
 	context := appengine.NewContext(r)
 
-	// If already exist the cache of the recent date, the program use the cache.
-	if arguments.Date != "" && templateCache.Tree != nil {
-		templateCache.Execute(w, arguments)
-		return
-	}
-
-	// Get the catalogue of the registries.
-	keys, _, err := getKeysOnDS(context, DATEKIND)
-	if err != nil {
-		fmt.Fprintf(w, err.Error())
-	}
-	// To get the list of registries.
-	for _, v := range keys {
-		arguments.Registries = append(arguments.Registries, v.StringID())
-	}
-	arguments.Registries.Sort()
-
-	// To get the latest date of the list.
-	u := make([]Store, len(keys))
-	err = datastore.GetMulti(context, keys, u)
-	if err != nil {
-		_, file, errorLine, _ := runtime.Caller(0)
-		fmt.Fprintf(w,
-			"I can't get latest dates.\nmessage: %s\nfile: %s\nline: %d",
-			err.Error(), file, errorLine)
-	}
-
-	var latest_date time.Time
-	for _, v := range u {
-		r := dateCheckRegex.FindSubmatch(v.Data)
-		if r != nil {
-			year, _ := strconv.Atoi(string(r[1]))
-			month, _ := strconv.Atoi(string(r[2]))
-			day, _ := strconv.Atoi(string(r[3]))
-			if err != nil {
-				_, file, errorLine, _ := runtime.Caller(0)
-				fmt.Fprintf(w,
-					"I don't get latest date.\nfile: %s\nline: %d", file, errorLine)
-				continue
-			}
-			t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
-			if latest_date.IsZero() || t.After(latest_date) {
-				latest_date = t
-			}
-		}
-	}
-	if latest_date.IsZero() {
-		arguments.Date = "Don't update."
+	// If already exist the recent date in MemCache, this program use it.
+	if tCache, err := memcache.Get(context, MEMCACHE_TEMPLATE); err == nil {
+		context.Infof("use memcache")
+		fmt.Fprintf(w, "%s", tCache.Value)
 	} else {
-		arguments.Date = fmt.Sprintf(
-			"%d/%02d/%02d", latest_date.Year(), latest_date.Month(), latest_date.Day())
-	}
+		context.Infof("don't use memcache")
+		// Get the catalogue of the registries.
+		keys, _, err := getKeysOnDS(context, DATEKIND)
+		if err != nil {
+			fmt.Fprintf(w, err.Error())
+		}
 
-	// Get the catalogue of the countries.
-	for _, registry := range arguments.Registries {
-		var u []Store
-		query := datastore.NewQuery(registry)
-		keys, err := query.GetAll(context, &u)
+		arguments := new(TemplateArguments)
+		arguments.Countries = make(map[string]int)
+
+		// To get the list of registries.
+		for _, v := range keys {
+			arguments.Registries = append(arguments.Registries, v.StringID())
+		}
+		arguments.Registries.Sort()
+
+		// To get the latest date of the list.
+		u := make([]Store, len(keys))
+		err = datastore.GetMulti(context, keys, u)
 		if err != nil {
 			_, file, errorLine, _ := runtime.Caller(0)
-			fmt.Fprintf(w, "I can't query %s.\nmessage: %s\nfile: %s\nline: %d",
-				registry, err.Error(), file, errorLine)
+			fmt.Fprintf(w,
+				"I can't get latest dates.\nmessage: %s\nfile: %s\nline: %d",
+				err.Error(), file, errorLine)
 		}
-		for _, v := range keys {
-			arguments.Countries[v.StringID()]++
-		}
-	}
 
-	t := template.Must(template.ParseFiles("index.html"))
-	templateCache = t
-	templateCache.Execute(w, arguments)
+		var latest_date time.Time
+		for _, v := range u {
+			r := dateCheckRegex.FindSubmatch(v.Data)
+			if r != nil {
+				year, _ := strconv.Atoi(string(r[1]))
+				month, _ := strconv.Atoi(string(r[2]))
+				day, _ := strconv.Atoi(string(r[3]))
+				if err != nil {
+					_, file, errorLine, _ := runtime.Caller(0)
+					fmt.Fprintf(w,
+						"I don't get latest date.\nfile: %s\nline: %d", file, errorLine)
+					continue
+				}
+				t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
+				if latest_date.IsZero() || t.After(latest_date) {
+					latest_date = t
+				}
+			}
+		}
+		if latest_date.IsZero() {
+			arguments.Date = "Don't update."
+		} else {
+			arguments.Date = fmt.Sprintf(
+				"%d/%02d/%02d", latest_date.Year(), latest_date.Month(), latest_date.Day())
+		}
+
+		// Get the catalogue of the countries.
+		for _, registry := range arguments.Registries {
+			var u []Store
+			query := datastore.NewQuery(registry)
+			keys, err := query.GetAll(context, &u)
+			if err != nil {
+				_, file, errorLine, _ := runtime.Caller(0)
+				fmt.Fprintf(w, "I can't query %s.\nmessage: %s\nfile: %s\nline: %d",
+					registry, err.Error(), file, errorLine)
+			}
+			for _, v := range keys {
+				arguments.Countries[v.StringID()]++
+			}
+		}
+
+		/* a template convert to html, then show it. */
+		wfm := new(WriterForMim)
+		t := template.Must(template.ParseFiles("index.html"))
+		t.Execute(wfm, arguments)
+
+		// be adding the cache of the template to MemCache.
+		item := &memcache.Item{
+			Key:   MEMCACHE_TEMPLATE,
+			Value: wfm.GetBytes(),
+		}
+		if err = memcache.Set(context, item); err != nil {
+			context.Warningf("Don't set the template cache to MemCache. message: %s", err.Error())
+		}
+
+		fmt.Fprintf(w, "%s", wfm.GetBytes())
+	}
 }
 
 func createAllCacheOnDS(context appengine.Context) (map[string]IPListType, error) {
@@ -434,6 +464,11 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		context.Errorf("Transaction failed: %v", err)
 		return
+	}
+
+	err = memcache.Delete(context, MEMCACHE_TEMPLATE)
+	if err != nil {
+		context.Errorf("occur the error when memcache is deleted.: %v", err)
 	}
 	initCache()
 }
