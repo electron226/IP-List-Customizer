@@ -272,7 +272,13 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	update_url := html.UnescapeString(r.Form["url"][0])
 	context.Infof("start update of ip list : %s", update_url)
 
-	client := urlfetch.Client(context)
+	// client := urlfetch.Client(context)
+	client := &http.Client{
+		Transport: &urlfetch.Transport{
+			Context:  context,
+			Deadline: 1 * time.Minute,
+		},
+	}
 	resp, err := client.Get(update_url)
 	if err != nil {
 		_, file, errorLine, _ := runtime.Caller(0)
