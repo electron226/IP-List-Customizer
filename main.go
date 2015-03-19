@@ -74,6 +74,7 @@ func getKeysOnDS(c appengine.Context, kind string) ([]*datastore.Key, []Store, e
 func handler(w http.ResponseWriter, r *http.Request) {
 	context := appengine.NewContext(r)
 
+	// If already exist the cache of the recent date, the program use the cache.
 	if arguments.Date != "" && templateCache.Tree != nil {
 		templateCache.Execute(w, arguments)
 		return
