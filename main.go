@@ -41,6 +41,8 @@ const MEMCACHE_TEMPLATE = "TEMPLATE"
 type IPType map[string]uint
 type IPListType map[string][]IPType
 
+var listCache = make(map[string]IPListType)
+
 type Store struct {
 	Data []byte
 }
@@ -49,12 +51,6 @@ type TemplateArguments struct {
 	Date       string
 	Countries  map[string]int
 	Registries sort.StringSlice
-}
-
-var listCache = make(map[string]IPListType)
-
-func initCache() {
-	listCache = make(map[string]IPListType)
 }
 
 type WriterForMim struct {
@@ -89,10 +85,8 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 	// If already exist the recent date in MemCache, this program use it.
 	if tCache, err := memcache.Get(context, MEMCACHE_TEMPLATE); err == nil {
-		context.Infof("use memcache")
 		fmt.Fprintf(w, "%s", tCache.Value)
 	} else {
-		context.Infof("don't use memcache")
 		// Get the catalogue of the registries.
 		keys, _, err := getKeysOnDS(context, DATEKIND)
 		if err != nil {
@@ -475,7 +469,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		context.Errorf("occur the error when memcache is deleted.: %v", err)
 	}
-	initCache()
+	listCache = make(map[string]IPListType)
 }
 
 func concat(left, right []IPType) []IPType {
@@ -536,8 +530,6 @@ func getIPtoUint(ip []byte) (uint, error) {
 }
 
 func init() {
-	initCache()
-
 	http.HandleFunc("/", handler)
 	http.HandleFunc("/cron", cronHandler)
 	http.HandleFunc("/update", updateHandler)
