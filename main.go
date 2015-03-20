@@ -341,24 +341,30 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	// To get the date of ip list. and check.
 	old_date := new(Store)
 	key := datastore.NewKey(context, DATEKIND, registry, 0, nil)
-	if err := datastore.Get(context, key, old_date); err == nil {
-		if bytes.Equal(old_date.Data, date[1]) {
-			context.Infof("%s is last update. so this update is end.", DATEKIND)
-			return
-		}
-		err = datastore.Delete(context, key)
-		if err != nil {
+	err = datastore.RunInTransaction(context, func(c appengine.Context) error {
+		if err := datastore.Get(context, key, old_date); err == nil {
+			if bytes.Equal(old_date.Data, date[1]) {
+				return fmt.Errorf("%s is last update. so this update is end.", DATEKIND)
+			}
+			err := datastore.Delete(context, key)
+			if err != nil {
+				_, file, errorLine, _ := runtime.Caller(0)
+				context.Criticalf("I can't delete %s.\nmessage: %s\n"+
+					"file: %s\nline: %d", DATEKIND, err.Error(), file, errorLine)
+				return err
+			}
+		} else if err == datastore.ErrNoSuchEntity {
+			context.Infof("%s in %s wasn't found. so I add the new date.", registry, DATEKIND)
+		} else {
 			_, file, errorLine, _ := runtime.Caller(0)
-			context.Criticalf("I can't delete %s.\nmessage: %s\n"+
-				"file: %s\nline: %d", DATEKIND, err.Error(), file, errorLine)
-			return
+			context.Criticalf("I can't get %s : %s.\nmessage: %s\n"+
+				"file: %s\nline: %d", DATEKIND, registry, err.Error(), file, errorLine)
+			return err
 		}
-	} else if err == datastore.ErrNoSuchEntity {
-		context.Infof("%s in %s wasn't found. so I add the new date.", registry, DATEKIND)
-	} else {
-		_, file, errorLine, _ := runtime.Caller(0)
-		context.Criticalf("I can't get %s : %s.\nmessage: %s\n"+
-			"file: %s\nline: %d", DATEKIND, registry, err.Error(), file, errorLine)
+		return err
+	}, nil)
+	if err != nil {
+		context.Errorf("the transaction of get the process of latest date was failed: %v", err)
 		return
 	}
 	context.Infof("The list of %s is starting update.", registry)
@@ -461,7 +467,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return err
 	}, nil)
 	if err != nil {
-		context.Errorf("Transaction failed: %v", err)
+		context.Errorf("the transaction of update process was failed: %v", err)
 		return
 	}
 
