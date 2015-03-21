@@ -35,7 +35,8 @@ var ipHeaderCheckRegex = regexp.MustCompile("[\\d.]+\\|[a-zA-Z]+\\|(\\d*)\\|\\d*
 var dateCheckRegex = regexp.MustCompile("^(\\d{4})(\\d{2})(\\d{2})$")
 var replaceCheckRegex = regexp.MustCompile("{[A-Z]+}")
 
-const DATEKIND = "LATEST_UPDATE"
+const DATE_KEY = "LATEST_DATE"
+const ETAG_KEY = "LATEST_ETAG"
 const MEMCACHE_TEMPLATE = "TEMPLATE"
 
 type IPType map[string]uint
@@ -75,7 +76,7 @@ func getKeysOnDS(c appengine.Context, kind string) ([]*datastore.Key, []Store, e
 	if err != nil {
 		_, file, errorLine, _ := runtime.Caller(0)
 		return nil, nil, fmt.Errorf("I can't query %s.\nmessage: %s\nfile: %s\nline: %d",
-			DATEKIND, err.Error(), file, errorLine)
+			kind, err.Error(), file, errorLine)
 	}
 	return keys, u, err
 }
@@ -88,7 +89,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "%s", tCache.Value)
 	} else {
 		// Get the catalogue of the registries.
-		keys, _, err := getKeysOnDS(context, DATEKIND)
+		keys, _, err := getKeysOnDS(context, DATE_KEY)
 		if err != nil {
 			fmt.Fprintf(w, err.Error())
 		}
@@ -173,7 +174,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 func createAllCacheOnDS(context appengine.Context) (map[string]IPListType, error) {
 	// Get the catalogue of the registries.
-	keys, _, err := getKeysOnDS(context, DATEKIND)
+	keys, _, err := getKeysOnDS(context, DATE_KEY)
 	if err != nil {
 		return nil, fmt.Errorf("%v", err.Error())
 	}
@@ -296,7 +297,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	registry := html.UnescapeString(r.Form["registry"][0])
 	update_url := html.UnescapeString(r.Form["url"][0])
-	context.Infof("start update of ip list : %s", update_url)
+	context.Infof("update of ip list is starting: %s", update_url)
 
 	client := &http.Client{
 		Transport: &urlfetch.Transport{
@@ -304,15 +305,72 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 			Deadline: 60 * time.Second,
 		},
 	}
+
+	// The program gets Etag in the datastore. And it's set in the header. Then send request it.
+	// If returned StatusCode is 304, already the list is the latest version.
+	// Else case be updating the list.
+	var eTag []byte
+	tempData := new(Store)
+	key := datastore.NewKey(context, ETAG_KEY, registry, 0, nil)
+	if err := datastore.Get(context, key, tempData); err == nil {
+		eTag = tempData.Data
+	} else if err == datastore.ErrNoSuchEntity {
+		context.Infof("%s in %s wasn't found. so I add the new date.", registry, ETAG_KEY)
+	} else {
+		_, file, errorLine, _ := runtime.Caller(0)
+		context.Criticalf("I can't get %s : %s.\nmessage: %s\n"+
+			"file: %s\nline: %d", ETAG_KEY, registry, err.Error(), file, errorLine)
+		return
+	}
+
+	if len(eTag) > 0 {
+		context.Infof("Compare new eTag and old Etag.")
+
+		req, err := http.NewRequest("HEAD", update_url, nil)
+		if err != nil {
+			_, file, errorLine, _ := runtime.Caller(0)
+			context.Criticalf("I can't get the header of the iplist of registry: %s.\n"+
+				"message: %s\nfile: %s\nline: %d", registry, err.Error(),
+				file, errorLine)
+			return
+		}
+
+		req.Header.Add("If-None-Match", fmt.Sprintf("%s", eTag))
+
+		resp, err := client.Do(req)
+		if err != nil {
+			_, file, errorLine, _ := runtime.Caller(0)
+			context.Criticalf("I can't doing Do function of the header of the iplist of registry: %s.\n"+
+				"message: %s\nstatus: %s\nfile: %s\nline: %d", registry, err.Error(),
+				resp.Status, file, errorLine)
+			return
+		}
+
+		if resp.StatusCode == http.StatusNotModified {
+			context.Infof("the ip list of %s wasn't updated. so this process is closing.", registry)
+			return
+		}
+	}
+
+	context.Infof("get the list of %s.", registry)
+
 	resp, err := client.Get(update_url)
+	defer resp.Body.Close()
 	if err != nil {
 		_, file, errorLine, _ := runtime.Caller(0)
 		context.Criticalf("I can't get the ip list of registry: %s.\n"+
-			"message: %s\ncode: %d\nfile: %s\nline: %d", registry, err.Error(),
-			http.StatusInternalServerError, file, errorLine)
+			"message: %s\nstatus: %d\nfile: %s\nline: %d", registry, err.Error(),
+			resp.Status, file, errorLine)
 		return
 	}
-	defer resp.Body.Close()
+
+	var newEtag []byte
+	tempEtag := resp.Header["Etag"] // If etag isn't exist, the variable is nil.
+	if tempEtag != nil {
+		// eTag[0] is take out Etag code in array of eTag.
+		eTagBuf := bytes.NewBufferString(tempEtag[0])
+		newEtag = eTagBuf.Bytes()
+	}
 
 	contents, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -322,7 +380,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// To checked the date of latest update, and old update date.
+	// get the date of latest update.
 	date := ipHeaderCheckRegex.FindSubmatch(contents)
 	if date == nil {
 		_, file, errorLine, _ := runtime.Caller(0)
@@ -332,35 +390,6 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// To get the date of ip list. and check.
-	old_date := new(Store)
-	key := datastore.NewKey(context, DATEKIND, registry, 0, nil)
-	err = datastore.RunInTransaction(context, func(c appengine.Context) error {
-		if err := datastore.Get(context, key, old_date); err == nil {
-			if bytes.Equal(old_date.Data, date[1]) {
-				return fmt.Errorf("%s is last update. so this update is end.", DATEKIND)
-			}
-			err := datastore.Delete(context, key)
-			if err != nil {
-				_, file, errorLine, _ := runtime.Caller(0)
-				context.Criticalf("I can't delete %s.\nmessage: %s\n"+
-					"file: %s\nline: %d", DATEKIND, err.Error(), file, errorLine)
-				return err
-			}
-		} else if err == datastore.ErrNoSuchEntity {
-			context.Infof("%s in %s wasn't found. so I add the new date.", registry, DATEKIND)
-		} else {
-			_, file, errorLine, _ := runtime.Caller(0)
-			context.Criticalf("I can't get %s : %s.\nmessage: %s\n"+
-				"file: %s\nline: %d", DATEKIND, registry, err.Error(), file, errorLine)
-			return err
-		}
-		return err
-	}, nil)
-	if err != nil {
-		context.Errorf("the transaction of get the process of latest date was failed: %v", err)
-		return
-	}
 	context.Infof("The list of %s is starting update.", registry)
 
 	result := ipCheckRegex.FindAllSubmatch(contents, -1)
@@ -407,6 +436,8 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	iplist = optimize(iplist)
 	context.Infof("optimize end. %s", registry)
 
+	context.Infof("Write the ip list and Etag.")
+
 	err = datastore.RunInTransaction(context, func(c appengine.Context) error {
 		// To delete old registry on datastore.
 		keys, _, err := getKeysOnDS(context, registry)
@@ -414,7 +445,6 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 			context.Errorf(err.Error())
 			return err
 		}
-
 		err = datastore.DeleteMulti(context, keys)
 		if err != nil {
 			_, file, errorLine, _ := runtime.Caller(0)
@@ -448,15 +478,49 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// To write the new date of a registry.
+		key := datastore.NewKey(context, DATE_KEY, registry, 0, nil)
+		err = datastore.Delete(context, key)
+		if !(err == nil || err == datastore.ErrNoSuchEntity) {
+			_, file, errorLine, _ := runtime.Caller(0)
+			context.Criticalf("I can't delete %s.\nmessage: %s\n"+
+				"file: %s\nline: %d", ETAG_KEY, err.Error(), file, errorLine)
+			return err
+		}
+
 		entry := Store{
 			Data: date[1],
 		}
-		key, err := datastore.Put(context, datastore.NewKey(context, DATEKIND, registry, 0, nil), &entry)
+		key, err = datastore.Put(context, key, &entry)
 		if err != nil {
 			_, file, errorLine, _ := runtime.Caller(0)
 			context.Criticalf("the list of %s wasn't wrote date.\nmessage: %s\n"+
 				"file: %s\nline: %d", key, err.Error(), file, errorLine)
 			return err
+		}
+
+		// To write the new ETag of a registry.
+		if len(newEtag) > 0 {
+			key := datastore.NewKey(context, ETAG_KEY, registry, 0, nil)
+			err := datastore.Delete(context, key)
+			if !(err == nil || err == datastore.ErrNoSuchEntity) {
+				_, file, errorLine, _ := runtime.Caller(0)
+				context.Criticalf("I can't delete %s.\nmessage: %s\n"+
+					"file: %s\nline: %d", ETAG_KEY, err.Error(), file, errorLine)
+				return err
+			}
+
+			entry := Store{
+				Data: newEtag,
+			}
+			key, err = datastore.Put(context, key, &entry)
+			if err != nil {
+				_, file, errorLine, _ := runtime.Caller(0)
+				context.Criticalf("the list of %s wasn't wrote date.\nmessage: %s\n"+
+					"file: %s\nline: %d", key, err.Error(), file, errorLine)
+				return err
+			}
+		} else {
+			context.Infof("the program isn't write the eTag into datastore because it don't get eTag.")
 		}
 		return err
 	}, nil)
@@ -465,11 +529,15 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	context.Infof("Clear the template cache in MemCache.")
+
 	err = memcache.Delete(context, MEMCACHE_TEMPLATE)
 	if err != nil {
 		context.Errorf("occur the error when memcache is deleted.: %v", err)
 	}
 	listCache = make(map[string]IPListType)
+
+	context.Infof("update of ip list is end: %s", update_url)
 }
 
 func concat(left, right []IPType) []IPType {
