@@ -533,7 +533,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	context.Infof("Clear the template cache in MemCache.")
 
 	err = memcache.Delete(context, MEMCACHE_TEMPLATE)
-	if err != nil {
+	if !(err == nil || err == memcache.ErrCacheMiss) {
 		context.Errorf("occur the error when memcache is deleted.: %v", err)
 	}
 	listCache = make(map[string]IPListType)
