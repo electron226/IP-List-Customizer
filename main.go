@@ -293,7 +293,8 @@ func cronHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func updateHandler(w http.ResponseWriter, r *http.Request) {
-	context := appengine.NewContext(r)
+	context := appengine.Timeout(appengine.NewContext(r), 30*time.Second)
+
 	r.ParseForm()
 	registry := html.UnescapeString(r.Form["registry"][0])
 	update_url := html.UnescapeString(r.Form["url"][0])
