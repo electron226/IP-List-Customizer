@@ -260,7 +260,7 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		listCache, err := createAllCacheOnDS(context)
+		cache, err := createAllCacheOnDS(context)
 		if err != nil {
 			_, file, errorLine, _ := runtime.Caller(0)
 			fmt.Fprintf(w,
@@ -268,9 +268,10 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 				err.Error(), file, errorLine)
 			return
 		}
+		listCache = cache
 
 		// convert the cache data to json data.
-		values, err := json.Marshal(listCache)
+		values, err := json.Marshal(cache)
 		if err != nil {
 			_, file, errorLine, _ := runtime.Caller(0)
 			fmt.Fprintf(w,
