@@ -518,11 +518,9 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 					"file: %s\nline: %d", err.Error(), file, errorLine)
 				return err
 			}
-			jsonbuf := new(bytes.Buffer)
-			jsonbuf.Write(jd)
 
 			entry := Store{
-				Data: jsonbuf.Bytes(),
+				Data: jd,
 			}
 			key, err := datastore.Put(context, datastore.NewKey(context, registry, country, 0, nil), &entry)
 			if err != nil {
