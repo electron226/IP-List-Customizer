@@ -312,22 +312,20 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 
 	outputList := make(map[string]map[string]bool)
 	for reg, v := range listCache {
+		t := make(map[string]bool)
 		if r.Form[reg] != nil {
-			t := make(map[string]bool)
 			for c, _ := range v {
 				t[c] = true
 			}
-			outputList[reg] = t
 		} else {
-			t := make(map[string]bool)
 			for c, _ := range v {
 				if r.Form[c] != nil {
 					t[c] = true
 				}
 			}
-			if len(t) > 0 {
-				outputList[reg] = t
-			}
+		}
+		if len(t) > 0 {
+			outputList[reg] = t
 		}
 	}
 
