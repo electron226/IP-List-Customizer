@@ -223,6 +223,7 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 
 	var listCache = make(map[string]IPListType)
 	if tCache, err := memcache.Get(context, MEMCACHE_LIST); err == nil {
+		// decompression by zlib.
 		var buffer bytes.Buffer
 		reader, err := zlib.NewReader(bytes.NewBuffer(tCache.Value))
 		if err != nil {
@@ -240,6 +241,7 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// convert the json data to the cache data.
 		err = json.Unmarshal(buffer.Bytes(), &listCache)
 		if err != nil {
 			fmt.Fprintf(w, "4 %v", err.Error())
@@ -252,7 +254,7 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// convert the cache data to json file.
+		// convert the cache data to json data.
 		values, err := json.Marshal(listCache)
 		if err != nil {
 			fmt.Fprintf(w, "%v", err.Error())
