@@ -227,37 +227,55 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 		var buffer bytes.Buffer
 		reader, err := zlib.NewReader(bytes.NewBuffer(tCache.Value))
 		if err != nil {
-			fmt.Fprintf(w, "1 %v", err.Error())
+			_, file, errorLine, _ := runtime.Caller(0)
+			fmt.Fprintf(w,
+				"Couldn't craete new reader of zlib.\nmessage: %s\nfile: %s\nline: %d",
+				err.Error(), file, errorLine)
 			return
 		}
 		_, err = io.Copy(&buffer, reader)
 		if err != nil {
-			fmt.Fprintf(w, "2 %v", err.Error())
+			_, file, errorLine, _ := runtime.Caller(0)
+			fmt.Fprintf(w,
+				"Couldn't copy from reader to buffer.\nmessage: %s\nfile: %s\nline: %d",
+				err.Error(), file, errorLine)
 			return
 		}
 		err = reader.Close()
 		if err != nil {
-			fmt.Fprintf(w, "3 %v", err.Error())
+			_, file, errorLine, _ := runtime.Caller(0)
+			fmt.Fprintf(w,
+				"Reader wasn't closed.\nmessage: %s\nfile: %s\nline: %d",
+				err.Error(), file, errorLine)
 			return
 		}
 
 		// convert the json data to the cache data.
 		err = json.Unmarshal(buffer.Bytes(), &listCache)
 		if err != nil {
-			fmt.Fprintf(w, "4 %v", err.Error())
+			_, file, errorLine, _ := runtime.Caller(0)
+			fmt.Fprintf(w,
+				"Couldn't conver from json data to cache data.\nmessage: %s\nfile: %s\nline: %d",
+				err.Error(), file, errorLine)
 			return
 		}
 	} else {
 		listCache, err := createAllCacheOnDS(context)
 		if err != nil {
-			fmt.Fprintf(w, "%v", err.Error())
+			_, file, errorLine, _ := runtime.Caller(0)
+			fmt.Fprintf(w,
+				"Coundn't create all cache data.\nmessage: %s\nfile: %s\nline: %d",
+				err.Error(), file, errorLine)
 			return
 		}
 
 		// convert the cache data to json data.
 		values, err := json.Marshal(listCache)
 		if err != nil {
-			fmt.Fprintf(w, "%v", err.Error())
+			_, file, errorLine, _ := runtime.Caller(0)
+			fmt.Fprintf(w,
+				"Coundn't convert from cache data to json data.\nmessage: %s\nfile: %s\nline: %d",
+				err.Error(), file, errorLine)
 			return
 		}
 
@@ -266,12 +284,18 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 		writer := zlib.NewWriter(&buffer)
 		_, err = writer.Write(values)
 		if err != nil {
-			fmt.Fprintf(w, "%v", err.Error())
+			_, file, errorLine, _ := runtime.Caller(0)
+			fmt.Fprintf(w,
+				"Coundn't compression by zlib.\nmessage: %s\nfile: %s\nline: %d",
+				err.Error(), file, errorLine)
 			return
 		}
 		err = writer.Close()
 		if err != nil {
-			fmt.Fprintf(w, "%v", err.Error())
+			_, file, errorLine, _ := runtime.Caller(0)
+			fmt.Fprintf(w,
+				"Coundn't close new writer of zlib.\nmessage: %s\nfile: %s\nline: %d",
+				err.Error(), file, errorLine)
 			return
 		}
 
