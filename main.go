@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -38,11 +39,10 @@ var replaceCheckRegex = regexp.MustCompile("{[A-Z]+}")
 const DATE_KEY = "LATEST_DATE"
 const ETAG_KEY = "LATEST_ETAG"
 const MEMCACHE_TEMPLATE = "TEMPLATE"
+const MEMCACHE_LIST = "LIST"
 
 type IPType map[string]uint
 type IPListType map[string][]IPType
-
-var listCache = make(map[string]IPListType)
 
 type Store struct {
 	Data []byte
@@ -221,13 +221,66 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 
 	r.ParseForm()
 
-	if len(listCache) == 0 {
-		cache, err := createAllCacheOnDS(context)
+	var listCache = make(map[string]IPListType)
+	if tCache, err := memcache.Get(context, MEMCACHE_LIST); err == nil {
+		var buffer bytes.Buffer
+		reader, err := zlib.NewReader(bytes.NewBuffer(tCache.Value))
+		if err != nil {
+			fmt.Fprintf(w, "1 %v", err.Error())
+			return
+		}
+		_, err = io.Copy(&buffer, reader)
+		if err != nil {
+			fmt.Fprintf(w, "2 %v", err.Error())
+			return
+		}
+		err = reader.Close()
+		if err != nil {
+			fmt.Fprintf(w, "3 %v", err.Error())
+			return
+		}
+
+		err = json.Unmarshal(buffer.Bytes(), &listCache)
+		if err != nil {
+			fmt.Fprintf(w, "4 %v", err.Error())
+			return
+		}
+	} else {
+		listCache, err := createAllCacheOnDS(context)
 		if err != nil {
 			fmt.Fprintf(w, "%v", err.Error())
 			return
 		}
-		listCache = cache
+
+		// convert the cache data to json file.
+		values, err := json.Marshal(listCache)
+		if err != nil {
+			fmt.Fprintf(w, "%v", err.Error())
+			return
+		}
+
+		// compession by zlib.
+		var buffer bytes.Buffer
+		writer := zlib.NewWriter(&buffer)
+		_, err = writer.Write(values)
+		if err != nil {
+			fmt.Fprintf(w, "%v", err.Error())
+			return
+		}
+		err = writer.Close()
+		if err != nil {
+			fmt.Fprintf(w, "%v", err.Error())
+			return
+		}
+
+		// set memcache.
+		item := &memcache.Item{
+			Key:   MEMCACHE_LIST,
+			Value: buffer.Bytes(),
+		}
+		if err = memcache.Set(context, item); err != nil {
+			context.Warningf("Don't set the template cache to MemCache. message: %s", err.Error())
+		}
 	}
 
 	outputList := make(map[string]map[string]bool)
@@ -530,13 +583,12 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	context.Infof("Clear the template cache in MemCache.")
+	context.Infof("Clear the caches in MemCache.")
 
-	err = memcache.Delete(context, MEMCACHE_TEMPLATE)
+	err = memcache.DeleteMulti(context, []string{MEMCACHE_TEMPLATE, MEMCACHE_LIST})
 	if !(err == nil || err == memcache.ErrCacheMiss) {
 		context.Errorf("occur the error when memcache is deleted.: %v", err)
 	}
-	listCache = make(map[string]IPListType)
 
 	context.Infof("update of ip list is end: %s", update_url)
 }
